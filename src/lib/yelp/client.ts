@@ -148,8 +148,14 @@ async function postTokenRequest(
   body: URLSearchParams,
 ): Promise<YelpOAuthTokenResponse> {
   const config = getYelpConfig();
+  const tokenEndpointUrl = config.oauthTokenUrl;
 
-  const response = await fetchWithTimeout(config.oauthTokenUrl, {
+  logger.info("oauth.token_endpoint_request", {
+    operation,
+    tokenEndpointUrl,
+  });
+
+  const response = await fetchWithTimeout(tokenEndpointUrl, {
     method: "POST",
     headers: {
       accept: "application/json",
@@ -163,6 +169,7 @@ async function postTokenRequest(
 
   logger.info("oauth.token_endpoint_response", {
     operation,
+    tokenEndpointUrl,
     status: response.status,
     responseBody,
   });

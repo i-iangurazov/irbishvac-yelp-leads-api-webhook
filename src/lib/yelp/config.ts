@@ -87,7 +87,7 @@ export function getYelpConfig(): YelpConfig {
     allowedBusinessIds: new Set(allowedBusinessIdList),
     allowedBusinessIdList,
     apiBaseUrl: "https://api.yelp.com",
-    oauthTokenUrl: "https://api.yelp.com/oauth2/tokens",
+    oauthTokenUrl: "https://api.yelp.com/oauth2/token",
     dataDir: resolveDataDir(readOptionalEnv("YELP_DATA_DIR") ?? DEFAULT_DATA_DIR),
     accessTokenRefreshBufferMs: parseRefreshBufferMs(
       readOptionalEnv("YELP_TOKEN_REFRESH_BUFFER_SECONDS"),

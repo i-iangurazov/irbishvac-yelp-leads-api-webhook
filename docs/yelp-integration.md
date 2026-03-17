@@ -79,7 +79,7 @@ The current code is already structured for that switch. `src/lib/yelp/storage.ts
 ## How OAuth Works
 
 1. Yelp redirects the business admin to `/api/yelp/oauth/callback?code=...&state=...`.
-2. The callback route exchanges `code` at Yelp’s OAuth token endpoint.
+2. The callback route exchanges `code` at Yelp’s OAuth token endpoint: `https://api.yelp.com/oauth2/token`.
 3. The route stores:
    - `accessToken`
    - `refreshToken`
@@ -89,6 +89,8 @@ The current code is already structured for that switch. `src/lib/yelp/storage.ts
 6. If Yelp still returns `401`, the code refreshes once and retries the request.
 
 There is no manual terminal token handling after setup. The callback route becomes the entry point for initial token capture, and refresh happens automatically after that.
+
+If the OAuth exchange returns `404 NOT_FOUND`, the first thing to check is the token endpoint URL. Yelp token exchange and refresh must use `https://api.yelp.com/oauth2/token`.
 
 ## How Webhook Processing Works
 
@@ -184,6 +186,7 @@ curl --request GET \
 
 - `Missing required Yelp environment variable`: one of the required server env vars is unset.
 - `Failed to exchange Yelp OAuth code`: the authorization code is missing, expired, already used, or does not match `YELP_REDIRECT_URI`.
+- `404 NOT_FOUND` from the Yelp token exchange: the token endpoint URL is wrong. It must be `https://api.yelp.com/oauth2/token`.
 - Repeated duplicate webhooks: expected when Yelp retries delivery. `event_id` dedupe prevents reprocessing.
 - Webhooks are accepted but nothing is persisted: confirm the incoming `data.id` is included in `YELP_ALLOWED_BUSINESS_IDS`.
 - Local tests work but production loses tokens or processed events: that is the expected failure mode of filesystem storage on serverless. Move to PostgreSQL or another durable adapter.

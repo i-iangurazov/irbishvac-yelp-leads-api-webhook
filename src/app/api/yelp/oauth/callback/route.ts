@@ -31,6 +31,7 @@ export async function GET(request: Request): Promise<Response> {
 
     logger.info("oauth.callback_debug_config", {
       redirectUri: config.redirectUri,
+      tokenEndpointUrl: config.oauthTokenUrl,
       credentialPresence: `client_id=${Boolean(config.clientId)} client_secret=${Boolean(config.clientSecret)}`,
       statePresent: Boolean(state),
     });

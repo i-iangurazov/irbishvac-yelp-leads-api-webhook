@@ -1,7 +1,7 @@
 import { mkdir, readFile, rename, writeFile } from "fs/promises";
 import path from "path";
 
-import { getYelpConfig } from "./config";
+import { getYelpConfig, resolveYelpDataDir } from "./config";
 import { createYelpLogger } from "./logger";
 import type {
   YelpNormalizedLead,
@@ -105,9 +105,7 @@ export class FileYelpStorageAdapter implements YelpStorageAdapter {
   private readonly leadsDir: string;
 
   constructor(baseDir = getYelpConfig().dataDir) {
-    this.baseDir = path.isAbsolute(baseDir)
-      ? baseDir
-      : path.join(process.cwd(), baseDir);
+    this.baseDir = resolveYelpDataDir(baseDir);
     this.tokensPath = path.join(this.baseDir, "tokens.json");
     this.processedEventsPath = path.join(
       this.baseDir,

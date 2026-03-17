@@ -1,6 +1,7 @@
 import path from "path";
 
 const DEFAULT_DATA_DIR = ".data/yelp";
+const DEFAULT_PRODUCTION_DATA_DIR = "/tmp/.data/yelp";
 const DEFAULT_REFRESH_BUFFER_SECONDS = 300;
 
 export interface YelpConfig {
@@ -65,9 +66,27 @@ function parseRefreshBufferMs(value: string | null): number {
 }
 
 function resolveDataDir(dataDir: string): string {
-  return path.isAbsolute(dataDir)
-    ? dataDir
+  if (path.isAbsolute(dataDir)) {
+    return dataDir;
+  }
+
+  return process.env.NODE_ENV === "production"
+    ? path.join("/tmp", dataDir)
     : path.join(process.cwd(), dataDir);
+}
+
+export function getDefaultYelpDataDir(): string {
+  return process.env.NODE_ENV === "production"
+    ? DEFAULT_PRODUCTION_DATA_DIR
+    : path.join(process.cwd(), DEFAULT_DATA_DIR);
+}
+
+export function resolveYelpDataDir(dataDir: string | null): string {
+  if (!dataDir) {
+    return getDefaultYelpDataDir();
+  }
+
+  return resolveDataDir(dataDir);
 }
 
 export function getYelpConfig(): YelpConfig {
@@ -88,7 +107,7 @@ export function getYelpConfig(): YelpConfig {
     allowedBusinessIdList,
     apiBaseUrl: "https://api.yelp.com",
     oauthTokenUrl: "https://api.yelp.com/oauth2/token",
-    dataDir: resolveDataDir(readOptionalEnv("YELP_DATA_DIR") ?? DEFAULT_DATA_DIR),
+    dataDir: resolveYelpDataDir(readOptionalEnv("YELP_DATA_DIR")),
     accessTokenRefreshBufferMs: parseRefreshBufferMs(
       readOptionalEnv("YELP_TOKEN_REFRESH_BUFFER_SECONDS"),
     ),

@@ -54,6 +54,8 @@ YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 
 The default local adapter is file-based. That is appropriate for development because it makes the token file, processed event log, and lead snapshots visible and easy to inspect.
 
+If you run the file adapter in serverless production as a temporary workaround, it will write under `/tmp/.data/yelp` instead of the app bundle path. That avoids write failures under `/var/task`, but it is still not durable storage.
+
 ## Production Setup
 
 Primary recommendation: deploy on Vercel if the rest of the app already runs on Vercel.

@@ -2,15 +2,14 @@
 
 ## Architecture Overview
 
-This integration adds a minimal Yelp Leads backend to a Next.js App Router app:
+This project is a minimal Next.js App Router backend for Yelp Leads:
 
-- `src/app/api/yelp/webhook/route.ts`: receives Yelp webhook events, supports verification, validates payloads, returns `200` quickly, and schedules lead processing.
-- `src/app/api/yelp/oauth/callback/route.ts`: exchanges the Yelp OAuth authorization code for tokens and persists them without exposing secrets.
+- `src/app/api/yelp/webhook/route.ts`: Yelp webhook verification, health response, payload validation, business rejection, and honest request summaries.
+- `src/app/api/yelp/oauth/callback/route.ts`: OAuth authorization-code callback and token persistence.
 - `src/lib/yelp/client.ts`: all Yelp HTTP calls using `fetch`.
-- `src/lib/yelp/tokens.ts`: token storage, expiry checks, refresh flow, and automatic retry after `401`.
-- `src/lib/yelp/processLead.ts`: dedupe, allowed-business validation, lead fetch, normalization, and snapshot persistence.
-- `src/lib/yelp/reply.ts`: `replyToLead(leadId, message)` helper for `POST /v3/leads/{lead_id}/events`.
-- `src/lib/yelp/storage.ts`: storage abstraction with a local file adapter for development and a clean seam for a production adapter.
+- `src/lib/yelp/tokens.ts`: access-token resolution, refresh flow, and retry on `401`.
+- `src/lib/yelp/processLead.ts`: per-update orchestration, dedupe, lead fetch, normalization, persistence, counters, and structured error aggregation.
+- `src/lib/yelp/storage.ts`: file-based dev adapter plus the adapter seam for real durable production storage.
 
 Local development stores files in:
 
@@ -18,13 +17,34 @@ Local development stores files in:
 - `.data/yelp/processed-events.json`
 - `.data/yelp/leads/{leadId}.json`
 
+Temporary serverless fallback writes to:
+
+- `/tmp/.data/yelp/tokens.json`
+- `/tmp/.data/yelp/processed-events.json`
+- `/tmp/.data/yelp/leads/{leadId}.json`
+
+That `/tmp` fallback is only a stopgap for Vercel/serverless. Durable storage is still required for real production.
+
 ## Why This Replaces `webhook.site`
 
-`webhook.site` is useful for manual verification, but it is not an application backend. It cannot safely own OAuth tokens, dedupe events, refresh access tokens, or persist lead state for your app. Yelp webhook traffic needs to land on your production app so the same system that receives events can authorize, fetch lead details, normalize them, and store them durably.
+`webhook.site` is fine for manual inspection, but it is not an application backend. It cannot own OAuth tokens safely, dedupe events, normalize leads, or persist webhook processing state for your app. Yelp webhook traffic needs to land on your app so the same system can authorize, fetch, process, and store leads.
+
+## Live IRBIS Businesses
+
+These are the live IRBIS businesses that should be accepted in production:
+
+- `1T1qXHt8mdTiXkPUpKn21A` -> `IRBIS San Jose`
+- `ys4FVTHxbSepIkvCLHYxCA` -> `IRBIS Redwood City`
+
+Set production `YELP_ALLOWED_BUSINESS_IDS` to exactly:
+
+```bash
+YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
+```
 
 ## Environment Variables
 
-Add these to `.env.local` for local development and to your deployment environment for production:
+Required:
 
 ```bash
 YELP_CLIENT_ID=your_yelp_client_id
@@ -34,14 +54,14 @@ YELP_REDIRECT_URI=http://localhost:3000/api/yelp/oauth/callback
 YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
 ```
 
-Optional server-side settings:
+Optional:
 
 ```bash
 YELP_DATA_DIR=.data/yelp
 YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 ```
 
-`YELP_API_KEY` is not used by the webhook processing code itself. It is still worth setting because it is needed for operational commands such as checking active Yelp webhook subscriptions.
+`YELP_API_KEY` is not used by webhook processing itself, but it is useful for operational subscription checks.
 
 ## Local Setup
 
@@ -50,62 +70,147 @@ YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 3. Run the app locally with `pnpm dev`.
 4. Complete the Yelp OAuth authorization flow so Yelp redirects to `/api/yelp/oauth/callback`.
 5. Confirm that `.data/yelp/tokens.json` exists after the callback succeeds.
-6. Send the local verification and webhook test requests listed below.
-
-The default local adapter is file-based. That is appropriate for development because it makes the token file, processed event log, and lead snapshots visible and easy to inspect.
-
-If you run the file adapter in serverless production as a temporary workaround, it will write under `/tmp/.data/yelp` instead of the app bundle path. That avoids write failures under `/var/task`, but it is still not durable storage.
+6. Run the curl checks below.
 
 ## Production Setup
 
 Primary recommendation: deploy on Vercel if the rest of the app already runs on Vercel.
 
-Important constraint: durable local file storage is not reliable on serverless platforms. On Vercel, the local filesystem is ephemeral and cannot be treated as a durable source of truth for tokens, processed event IDs, or lead snapshots.
+Important constraint: local filesystem storage is not durable on serverless. The current file adapter can use `/tmp/.data/yelp` as a temporary write location, but `/tmp` is ephemeral and not a real production datastore.
 
-The simplest production path is:
+The simplest durable production path is:
 
-1. Deploy the Next.js app on Vercel.
+1. Deploy the app on Vercel.
 2. Replace the default file adapter in `src/lib/yelp/storage.ts` with a durable `YelpStorageAdapter`.
 3. Store Yelp tokens, processed event IDs, and lead snapshots in PostgreSQL or another durable store.
 
 Recommended production storage shape:
 
-- `yelp_oauth_tokens`: one row for the current Yelp OAuth token set.
-- `yelp_processed_events`: unique `event_id` for deduplication and retry-safe replay.
-- `yelp_lead_snapshots`: one row per `lead_id`, updated as new events arrive.
-
-PostgreSQL is the cleanest single-store production option because it handles durable token storage, unique constraints on `event_id`, and lead snapshot history in one place. A Redis-compatible store is fine if you already run one, but make sure lead snapshots still land in durable storage and not just volatile cache.
-
-The current code is already structured for that switch. `src/lib/yelp/storage.ts` exposes the `YelpStorageAdapter` interface and `setYelpStorageAdapter(...)`. In production, replace the file-backed default with your PostgreSQL or Redis-backed implementation and keep the rest of the Yelp code unchanged.
+- `yelp_oauth_tokens`: one row for the current Yelp OAuth token set
+- `yelp_processed_events`: unique `event_id`
+- `yelp_lead_snapshots`: one row per `lead_id`
 
 ## How OAuth Works
 
 1. Yelp redirects the business admin to `/api/yelp/oauth/callback?code=...&state=...`.
-2. The callback route exchanges `code` at Yelp’s OAuth token endpoint: `https://api.yelp.com/oauth2/token`.
+2. The callback route exchanges `code` at `https://api.yelp.com/oauth2/token`.
 3. The route stores:
    - `accessToken`
    - `refreshToken`
    - `expiresOn`
 4. Later requests resolve the stored token through `src/lib/yelp/tokens.ts`.
-5. If the token is near expiry, the code refreshes it automatically before the Yelp API call.
-6. If Yelp still returns `401`, the code refreshes once and retries the request.
+5. If the token is near expiry, it is refreshed automatically.
+6. If Yelp still returns `401`, the request is retried once after refresh.
 
-There is no manual terminal token handling after setup. The callback route becomes the entry point for initial token capture, and refresh happens automatically after that.
+If the OAuth exchange returns `404 NOT_FOUND`, the token endpoint URL is wrong. Yelp token exchange and token refresh must both use:
 
-If the OAuth exchange returns `404 NOT_FOUND`, the first thing to check is the token endpoint URL. Yelp token exchange and refresh must use `https://api.yelp.com/oauth2/token`.
+```text
+https://api.yelp.com/oauth2/token
+```
+
+## Webhook Verification and Health
+
+- `GET /api/yelp/webhook?verification=abc` returns:
+
+```json
+{ "verification": "abc" }
+```
+
+- `GET /api/yelp/webhook` returns:
+
+```json
+{ "ok": true, "message": "Yelp webhook endpoint is live" }
+```
 
 ## How Webhook Processing Works
 
-1. `GET /api/yelp/webhook?verification=abc` returns `{ "verification": "abc" }`.
-2. `POST /api/yelp/webhook` parses the Yelp payload and returns `200` quickly.
-3. The processor validates `data.id` against `YELP_ALLOWED_BUSINESS_IDS`.
-4. Each webhook update is deduplicated by `event_id`.
-5. For each new event, the service resolves a valid access token.
-6. The service fetches the lead from Yelp.
-7. The lead is normalized and stored.
-8. The event ID is marked as processed.
+1. The route validates the payload shape.
+2. The route requires `payload.object === "business"`.
+3. The route requires `data.id` and `data.updates`.
+4. Every update must include:
+   - `event_id`
+   - `lead_id`
+   - `event_type`
+   - `interaction_time`
+5. Unsupported business IDs are rejected with `403`.
+6. Duplicate `event_id` values are skipped explicitly and counted.
+7. Non-duplicate events fetch a valid access token.
+8. The service fetches the Yelp lead by `lead_id`.
+9. The lead is normalized and persisted.
+10. The processed `event_id` is stored for deduplication.
 
-Unknown business IDs are ignored rather than retried. Invalid payloads return a safe `400`.
+Malformed payloads return `400`. Processing failures return `500` with a sanitized, structured summary.
+
+## Business Identification
+
+Every valid POST is tagged in logs and responses with:
+
+- `businessId`
+- `businessName`
+
+That makes it obvious whether the webhook came from:
+
+- `IRBIS San Jose`
+- `IRBIS Redwood City`
+
+## POST Response Meaning
+
+Successful or duplicate-only processing returns a body like:
+
+```json
+{
+  "ok": true,
+  "businessId": "1T1qXHt8mdTiXkPUpKn21A",
+  "businessName": "IRBIS San Jose",
+  "processed": 1,
+  "skippedDuplicates": 0,
+  "failed": 0
+}
+```
+
+Partial or full processing failure returns a body like:
+
+```json
+{
+  "ok": false,
+  "businessId": "1T1qXHt8mdTiXkPUpKn21A",
+  "businessName": "IRBIS San Jose",
+  "processed": 0,
+  "skippedDuplicates": 0,
+  "failed": 1,
+  "errors": [
+    {
+      "eventId": "evt_test_001",
+      "leadId": "29HeLueoGE2vvD8tEVJYMQ",
+      "eventType": "NEW_EVENT",
+      "interactionTime": "2026-03-17T15:00:00+00:00",
+      "stage": "lead_fetch",
+      "message": "Failed to fetch Yelp lead details."
+    }
+  ]
+}
+```
+
+Meaning of the counters:
+
+- `processed`: successfully fetched and persisted lead updates
+- `skippedDuplicates`: duplicate or already-in-flight `event_id` values
+- `failed`: updates that could not complete safely
+
+## Expected Log Events
+
+The webhook path emits structured events such as:
+
+- `webhook.request_received`
+- `webhook.validation_failed`
+- `webhook.business_rejected`
+- `webhook.update_processing_started`
+- `webhook.update_duplicate_skipped`
+- `webhook.lead_fetch_succeeded`
+- `webhook.lead_fetch_failed`
+- `webhook.persistence_succeeded`
+- `webhook.persistence_failed`
+- `webhook.request_completed`
 
 ## Exact `curl` Commands
 
@@ -190,6 +295,7 @@ curl --request GET \
 - `Failed to exchange Yelp OAuth code`: the authorization code is missing, expired, already used, or does not match `YELP_REDIRECT_URI`.
 - `404 NOT_FOUND` from the Yelp token exchange: the token endpoint URL is wrong. It must be `https://api.yelp.com/oauth2/token`.
 - Repeated duplicate webhooks: expected when Yelp retries delivery. `event_id` dedupe prevents reprocessing.
-- Webhooks are accepted but nothing is persisted: confirm the incoming `data.id` is included in `YELP_ALLOWED_BUSINESS_IDS`.
-- Local tests work but production loses tokens or processed events: that is the expected failure mode of filesystem storage on serverless. Move to PostgreSQL or another durable adapter.
+- `403` from the webhook route: the incoming `data.id` is not one of the accepted IRBIS business IDs.
+- `500` with webhook errors: at least one update failed lead fetch or persistence. Inspect structured log events for the failing stage.
+- Local tests work but production loses tokens or processed events: the current file adapter is still not durable storage. Move to PostgreSQL or another durable adapter.
 - Reply failures after long uptime: verify the stored refresh token is valid and that the OAuth app still has the required Yelp scopes.

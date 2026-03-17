@@ -1,8 +1,14 @@
 import path from "path";
 
+import type { YelpBusinessMetadata } from "./types";
+
 const DEFAULT_DATA_DIR = ".data/yelp";
 const DEFAULT_PRODUCTION_DATA_DIR = "/tmp/.data/yelp";
 const DEFAULT_REFRESH_BUFFER_SECONDS = 300;
+const YELP_BUSINESS_NAME_BY_ID = {
+  "1T1qXHt8mdTiXkPUpKn21A": "IRBIS San Jose",
+  ys4FVTHxbSepIkvCLHYxCA: "IRBIS Redwood City",
+} as const;
 
 export interface YelpConfig {
   clientId: string;
@@ -118,4 +124,28 @@ export function getYelpConfig(): YelpConfig {
 
 export function isAllowedBusinessId(businessId: string): boolean {
   return getYelpConfig().allowedBusinessIds.has(businessId);
+}
+
+export function getYelpBusinessName(businessId: string): string {
+  return YELP_BUSINESS_NAME_BY_ID[
+    businessId as keyof typeof YELP_BUSINESS_NAME_BY_ID
+  ] ?? "Unknown Yelp business";
+}
+
+export function getYelpBusinessMetadata(
+  businessId: string,
+): YelpBusinessMetadata {
+  return {
+    businessId,
+    businessName: getYelpBusinessName(businessId),
+  };
+}
+
+export function getKnownYelpBusinesses(): YelpBusinessMetadata[] {
+  return Object.entries(YELP_BUSINESS_NAME_BY_ID).map(
+    ([businessId, businessName]) => ({
+      businessId,
+      businessName,
+    }),
+  );
 }

@@ -9,7 +9,7 @@ export interface YelpWebhookUpdate {
   event_type: string;
   event_id: string;
   lead_id: string;
-  interaction_time?: string | null;
+  interaction_time: string;
 }
 
 export interface YelpWebhookPayload {
@@ -44,7 +44,7 @@ export interface YelpProcessedEventRecord {
   businessId: string;
   leadId: string;
   eventType: string;
-  interactionTime: string | null;
+  interactionTime: string;
   webhookTime: string;
   processedAt: string;
   payload: YelpWebhookUpdate;
@@ -150,8 +150,40 @@ export interface YelpStorageAdapter {
   saveLeadSnapshot(lead: YelpNormalizedLead): Promise<void>;
 }
 
+export interface YelpBusinessMetadata {
+  businessId: string;
+  businessName: string;
+}
+
+export interface YelpWebhookProcessError {
+  eventId: string;
+  leadId: string;
+  eventType: string;
+  interactionTime: string;
+  stage:
+    | "validation"
+    | "deduplication"
+    | "lead_fetch"
+    | "persistence"
+    | "processing";
+  message: string;
+}
+
+export interface YelpWebhookUpdateResult {
+  eventId: string;
+  leadId: string;
+  eventType: string;
+  interactionTime: string;
+  status: "processed" | "duplicate" | "failed";
+}
+
 export interface YelpProcessResult {
-  accepted: boolean;
+  ok: boolean;
+  businessId: string;
+  businessName: string;
   processed: number;
-  skipped: number;
+  skippedDuplicates: number;
+  failed: number;
+  errors: YelpWebhookProcessError[];
+  updates: YelpWebhookUpdateResult[];
 }

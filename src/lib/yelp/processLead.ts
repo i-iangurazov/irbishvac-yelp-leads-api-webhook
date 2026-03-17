@@ -1,5 +1,8 @@
 import { getLeadById } from "./client";
-import { isAllowedBusinessId } from "./config";
+import {
+  getYelpBusinessMetadata,
+  isAllowedBusinessId,
+} from "./config";
 import { createYelpLogger } from "./logger";
 import { getYelpStorage } from "./storage";
 import { withYelpAccessToken } from "./tokens";
@@ -12,7 +15,9 @@ import type {
   YelpProcessedEventRecord,
   YelpStorageAdapter,
   YelpWebhookPayload,
+  YelpWebhookProcessError,
   YelpWebhookUpdate,
+  YelpWebhookUpdateResult,
 } from "./types";
 
 const logger = createYelpLogger({
@@ -20,6 +25,21 @@ const logger = createYelpLogger({
 });
 
 const inFlightEventIds = new Set<string>();
+
+type UpdateOutcome =
+  | {
+      status: "processed";
+      result: YelpWebhookUpdateResult;
+    }
+  | {
+      status: "duplicate";
+      result: YelpWebhookUpdateResult;
+    }
+  | {
+      status: "failed";
+      result: YelpWebhookUpdateResult;
+      error: YelpWebhookProcessError;
+    };
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return Boolean(value) && typeof value === "object" && !Array.isArray(value);
@@ -141,11 +161,55 @@ function normalizeSurveyAnswers(rawLead: YelpLead): YelpNormalizedSurveyAnswer[]
     .filter((answer): answer is YelpNormalizedSurveyAnswer => Boolean(answer));
 }
 
+function createUpdateResult(
+  update: YelpWebhookUpdate,
+  status: YelpWebhookUpdateResult["status"],
+): YelpWebhookUpdateResult {
+  return {
+    eventId: update.event_id,
+    leadId: update.lead_id,
+    eventType: update.event_type,
+    interactionTime: update.interaction_time,
+    status,
+  };
+}
+
+function createProcessError(
+  update: YelpWebhookUpdate,
+  stage: YelpWebhookProcessError["stage"],
+  message: string,
+): YelpWebhookProcessError {
+  return {
+    eventId: update.event_id,
+    leadId: update.lead_id,
+    eventType: update.event_type,
+    interactionTime: update.interaction_time,
+    stage,
+    message,
+  };
+}
+
+function isWebhookProcessError(
+  value: unknown,
+): value is YelpWebhookProcessError {
+  const error = asRecord(value);
+
+  return Boolean(
+    error &&
+      readString(error.eventId) &&
+      readString(error.leadId) &&
+      readString(error.eventType) &&
+      readString(error.interactionTime) &&
+      readString(error.stage) &&
+      readString(error.message),
+  );
+}
+
 export function normalizeYelpLead(options: {
   businessId: string;
   leadId: string;
   rawLead: YelpLead;
-  interactionTime?: string | null;
+  interactionTime: string;
 }): YelpNormalizedLead {
   const { businessId, leadId, rawLead, interactionTime } = options;
 
@@ -217,10 +281,11 @@ function parseWebhookUpdate(value: unknown): YelpWebhookUpdate {
   const eventType = readString(update.event_type);
   const eventId = readString(update.event_id);
   const leadId = readString(update.lead_id);
+  const interactionTime = readString(update.interaction_time);
 
-  if (!eventType || !eventId || !leadId) {
+  if (!eventType || !eventId || !leadId || !interactionTime) {
     throw new Error(
-      "Each Yelp webhook update must include event_type, event_id, and lead_id.",
+      "Each Yelp webhook update must include event_type, event_id, lead_id, and interaction_time.",
     );
   }
 
@@ -228,7 +293,7 @@ function parseWebhookUpdate(value: unknown): YelpWebhookUpdate {
     event_type: eventType,
     event_id: eventId,
     lead_id: leadId,
-    interaction_time: pickFirstString(update.interaction_time),
+    interaction_time: interactionTime,
   };
 }
 
@@ -245,6 +310,10 @@ export function parseYelpWebhookPayload(value: unknown): YelpWebhookPayload {
 
   if (!time || !object || !data) {
     throw new Error("Yelp webhook payload must include time, object, and data.");
+  }
+
+  if (object !== "business") {
+    throw new Error('Yelp webhook payload object must be "business".');
   }
 
   const businessId = readString(data.id);
@@ -271,25 +340,44 @@ async function processSingleWebhookUpdate(
   payload: YelpWebhookPayload,
   update: YelpWebhookUpdate,
   storage: YelpStorageAdapter,
-): Promise<"processed" | "skipped"> {
+): Promise<UpdateOutcome> {
+  const business = getYelpBusinessMetadata(payload.data.id);
   const eventLogger = logger.child({
-    businessId: payload.data.id,
+    businessId: business.businessId,
+    businessName: business.businessName,
     eventId: update.event_id,
     leadId: update.lead_id,
+    eventType: update.event_type,
+    interactionTime: update.interaction_time,
   });
+
+  eventLogger.info("webhook.update_processing_started");
+
+  const duplicateResult = createUpdateResult(update, "duplicate");
 
   const alreadyProcessed = await storage.getProcessedEvent(update.event_id);
 
   if (alreadyProcessed) {
-    eventLogger.info("lead_event.duplicate", {
+    eventLogger.info("webhook.update_duplicate_skipped", {
+      reason: "already_processed",
       processedAt: alreadyProcessed.processedAt,
     });
-    return "skipped";
+
+    return {
+      status: "duplicate",
+      result: duplicateResult,
+    };
   }
 
   if (inFlightEventIds.has(update.event_id)) {
-    eventLogger.info("lead_event.already_in_flight");
-    return "skipped";
+    eventLogger.info("webhook.update_duplicate_skipped", {
+      reason: "in_flight",
+    });
+
+    return {
+      status: "duplicate",
+      result: duplicateResult,
+    };
   }
 
   inFlightEventIds.add(update.event_id);
@@ -298,10 +386,27 @@ async function processSingleWebhookUpdate(
     const rawLead = await withYelpAccessToken(
       (accessToken) => getLeadById(update.lead_id, accessToken),
       storage,
-    );
+    )
+      .then((lead) => {
+        eventLogger.info("webhook.lead_fetch_succeeded");
+        return lead;
+      })
+      .catch((error: unknown) => {
+        eventLogger.error("webhook.lead_fetch_failed", {
+          error,
+        });
+
+        return Promise.reject(
+          createProcessError(
+            update,
+            "lead_fetch",
+            "Failed to fetch Yelp lead details.",
+          ),
+        );
+      });
 
     const normalizedLead = normalizeYelpLead({
-      businessId: payload.data.id,
+      businessId: business.businessId,
       leadId: update.lead_id,
       rawLead,
       interactionTime: update.interaction_time,
@@ -309,23 +414,62 @@ async function processSingleWebhookUpdate(
 
     const processedRecord: YelpProcessedEventRecord = {
       eventId: update.event_id,
-      businessId: payload.data.id,
+      businessId: business.businessId,
       leadId: update.lead_id,
       eventType: update.event_type,
-      interactionTime: update.interaction_time ?? null,
+      interactionTime: update.interaction_time,
       webhookTime: payload.time,
       processedAt: new Date().toISOString(),
       payload: update,
     };
 
-    await storage.saveLeadSnapshot(normalizedLead);
-    await storage.markProcessedEvent(update.event_id, processedRecord);
+    try {
+      await storage.saveLeadSnapshot(normalizedLead);
+      await storage.markProcessedEvent(update.event_id, processedRecord);
 
-    eventLogger.info("lead_event.processed", {
-      eventType: update.event_type,
+      eventLogger.info("webhook.persistence_succeeded");
+
+      return {
+        status: "processed",
+        result: createUpdateResult(update, "processed"),
+      };
+    } catch (error) {
+      eventLogger.error("webhook.persistence_failed", {
+        error,
+      });
+
+      return {
+        status: "failed",
+        result: createUpdateResult(update, "failed"),
+        error: createProcessError(
+          update,
+          "persistence",
+          "Failed to persist Yelp lead data.",
+        ),
+      };
+    }
+  } catch (error) {
+    if (isWebhookProcessError(error)) {
+      return {
+        status: "failed",
+        result: createUpdateResult(update, "failed"),
+        error,
+      };
+    }
+
+    eventLogger.error("webhook.update_processing_failed", {
+      error,
     });
 
-    return "processed";
+    return {
+      status: "failed",
+      result: createUpdateResult(update, "failed"),
+      error: createProcessError(
+        update,
+        "processing",
+        "Failed to process Yelp webhook update.",
+      ),
+    };
   } finally {
     inFlightEventIds.delete(update.event_id);
   }
@@ -335,57 +479,92 @@ export async function processYelpWebhookPayload(
   payload: YelpWebhookPayload,
   storage: YelpStorageAdapter = getYelpStorage(),
 ): Promise<YelpProcessResult> {
+  const business = getYelpBusinessMetadata(payload.data.id);
+
   if (payload.object !== "business") {
-    logger.warn("webhook.unsupported_object", {
+    logger.warn("webhook.validation_failed", {
+      businessId: business.businessId,
+      businessName: business.businessName,
+      reason: 'Unsupported payload.object. Expected "business".',
       object: payload.object,
     });
 
     return {
-      accepted: false,
+      ok: false,
+      businessId: business.businessId,
+      businessName: business.businessName,
       processed: 0,
-      skipped: payload.data.updates.length,
+      skippedDuplicates: 0,
+      failed: payload.data.updates.length,
+      errors: [],
+      updates: [],
     };
   }
 
   if (!isAllowedBusinessId(payload.data.id)) {
-    logger.warn("webhook.unallowed_business_id", {
-      businessId: payload.data.id,
+    logger.warn("webhook.business_rejected", {
+      businessId: business.businessId,
+      businessName: business.businessName,
     });
 
     return {
-      accepted: false,
+      ok: false,
+      businessId: business.businessId,
+      businessName: business.businessName,
       processed: 0,
-      skipped: payload.data.updates.length,
+      skippedDuplicates: 0,
+      failed: payload.data.updates.length,
+      errors: [],
+      updates: [],
     };
   }
 
-  let processed = 0;
-  let skipped = 0;
+  const result: YelpProcessResult = {
+    ok: true,
+    businessId: business.businessId,
+    businessName: business.businessName,
+    processed: 0,
+    skippedDuplicates: 0,
+    failed: 0,
+    errors: [],
+    updates: [],
+  };
 
   for (const update of payload.data.updates) {
-    try {
-      const outcome = await processSingleWebhookUpdate(payload, update, storage);
+    const outcome = await processSingleWebhookUpdate(payload, update, storage);
 
-      if (outcome === "processed") {
-        processed += 1;
-      } else {
-        skipped += 1;
-      }
-    } catch (error) {
-      skipped += 1;
+    result.updates.push(outcome.result);
 
-      logger.error("lead_event.processing_failed", {
-        businessId: payload.data.id,
-        eventId: update.event_id,
-        leadId: update.lead_id,
-        error,
-      });
+    switch (outcome.status) {
+      case "processed":
+        result.processed += 1;
+        break;
+      case "duplicate":
+        result.skippedDuplicates += 1;
+        break;
+      case "failed":
+        result.failed += 1;
+        result.errors.push(outcome.error);
+        break;
     }
   }
 
-  return {
-    accepted: true,
-    processed,
-    skipped,
+  result.ok = result.failed === 0;
+
+  const logDetails = {
+    businessId: result.businessId,
+    businessName: result.businessName,
+    processed: result.processed,
+    skippedDuplicates: result.skippedDuplicates,
+    failed: result.failed,
+    errorCount: result.errors.length,
   };
+
+  if (result.ok) {
+    logger.info("webhook.request_completed", logDetails);
+  } else {
+    logger.warn("webhook.request_completed", logDetails);
+  }
+
+  return result;
 }

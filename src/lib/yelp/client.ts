@@ -99,6 +99,34 @@ async function parseJsonResponse<T>(
   }
 }
 
+function parseJsonText<T>(text: string, operation: string): T {
+  if (!text) {
+    return {} as T;
+  }
+
+  try {
+    return JSON.parse(text) as T;
+  } catch (error) {
+    throw new Error(
+      `Yelp ${operation} returned a non-JSON response: ${
+        error instanceof Error ? error.message : "unknown parse error"
+      }`,
+    );
+  }
+}
+
+function parseResponseBodyForLog(text: string): unknown {
+  if (!text) {
+    return null;
+  }
+
+  try {
+    return JSON.parse(text) as Record<string, unknown>;
+  } catch {
+    return text;
+  }
+}
+
 function buildBearerHeaders(
   accessToken: string,
   contentType?: string,
@@ -130,7 +158,27 @@ async function postTokenRequest(
     body,
   });
 
-  return parseJsonResponse<YelpOAuthTokenResponse>(response, operation);
+  const text = await response.text();
+  const responseBody = parseResponseBodyForLog(text);
+
+  logger.info("oauth.token_endpoint_response", {
+    operation,
+    status: response.status,
+    responseBody,
+  });
+
+  if (!response.ok) {
+    throw new YelpApiError(
+      `Yelp ${operation} failed with status ${response.status}.`,
+      {
+        status: response.status,
+        operation,
+        responseBody: text || null,
+      },
+    );
+  }
+
+  return parseJsonText<YelpOAuthTokenResponse>(text, operation);
 }
 
 export async function exchangeAuthCode(

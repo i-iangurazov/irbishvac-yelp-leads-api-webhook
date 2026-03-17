@@ -1,5 +1,6 @@
 import { NextResponse } from "next/server";
 
+import { getYelpConfig } from "../../../../../lib/yelp/config";
 import { createYelpLogger } from "../../../../../lib/yelp/logger";
 import { exchangeAndStoreAuthCode } from "../../../../../lib/yelp/tokens";
 
@@ -26,6 +27,14 @@ export async function GET(request: Request): Promise<Response> {
   }
 
   try {
+    const config = getYelpConfig();
+
+    logger.info("oauth.callback_debug_config", {
+      redirectUri: config.redirectUri,
+      credentialPresence: `client_id=${Boolean(config.clientId)} client_secret=${Boolean(config.clientSecret)}`,
+      statePresent: Boolean(state),
+    });
+
     const tokens = await exchangeAndStoreAuthCode(code);
 
     logger.info("oauth.callback_completed", {

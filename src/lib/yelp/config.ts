@@ -14,6 +14,7 @@ export interface YelpConfig {
   clientId: string;
   clientSecret: string;
   apiKey: string | null;
+  internalApiSecret: string | null;
   redirectUri: string;
   allowedBusinessIds: ReadonlySet<string>;
   allowedBusinessIdList: string[];
@@ -108,6 +109,7 @@ export function getYelpConfig(): YelpConfig {
     clientId: readRequiredEnv("YELP_CLIENT_ID"),
     clientSecret: readRequiredEnv("YELP_CLIENT_SECRET"),
     apiKey: readOptionalEnv("YELP_API_KEY"),
+    internalApiSecret: readOptionalEnv("YELP_INTERNAL_API_SECRET"),
     redirectUri: readRequiredEnv("YELP_REDIRECT_URI"),
     allowedBusinessIds: new Set(allowedBusinessIdList),
     allowedBusinessIdList,

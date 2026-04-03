@@ -50,6 +50,7 @@ Required:
 YELP_CLIENT_ID=your_yelp_client_id
 YELP_CLIENT_SECRET=your_yelp_client_secret
 YELP_API_KEY=your_yelp_api_key
+YELP_INTERNAL_API_SECRET=your_internal_secret
 YELP_REDIRECT_URI=http://localhost:3000/api/yelp/oauth/callback
 YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
 ```
@@ -62,6 +63,7 @@ YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 ```
 
 `YELP_API_KEY` is not used by webhook processing itself, but it is useful for operational subscription checks.
+`YELP_INTERNAL_API_SECRET` protects the token retrieval endpoint and should be a long random secret.
 
 ## Local Setup
 
@@ -101,6 +103,26 @@ Recommended production storage shape:
 4. Later requests resolve the stored token through `src/lib/yelp/tokens.ts`.
 5. If the token is near expiry, it is refreshed automatically.
 6. If Yelp still returns `401`, the request is retried once after refresh.
+
+## Access Token Retrieval
+
+If another internal system needs the current Yelp access token, call the
+protected route below with your internal secret:
+
+```bash
+curl \
+  --header "Authorization: Bearer ${YELP_INTERNAL_API_SECRET}" \
+  http://localhost:3000/api/yelp/token
+```
+
+Successful responses include:
+
+- `accessToken`
+- `tokenType`
+- `expiresOn`
+- `scope`
+
+This route does not return the refresh token.
 
 If the OAuth exchange returns `404 NOT_FOUND`, the token endpoint URL is wrong. Yelp token exchange and token refresh must both use:
 

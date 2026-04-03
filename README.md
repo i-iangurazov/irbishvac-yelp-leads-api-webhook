@@ -17,6 +17,7 @@ Create `.env.local`:
 YELP_CLIENT_ID=your_yelp_client_id
 YELP_CLIENT_SECRET=your_yelp_client_secret
 YELP_API_KEY=your_yelp_api_key
+YELP_INTERNAL_API_SECRET=your_internal_secret
 YELP_REDIRECT_URI=http://localhost:3000/api/yelp/oauth/callback
 YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
 ```
@@ -71,6 +72,14 @@ OAuth callback route:
 
 ```bash
 curl "http://localhost:3000/api/yelp/oauth/callback?code=TEST_CODE&state=test123"
+```
+
+Protected access-token route:
+
+```bash
+curl \
+  --header "Authorization: Bearer $YELP_INTERNAL_API_SECRET" \
+  http://localhost:3000/api/yelp/token
 ```
 
 ## Docs

@@ -2,6 +2,7 @@ const envVars = [
   "YELP_CLIENT_ID",
   "YELP_CLIENT_SECRET",
   "YELP_API_KEY",
+  "YELP_INTERNAL_API_SECRET",
   "YELP_REDIRECT_URI",
   "YELP_ALLOWED_BUSINESS_IDS",
 ] as const;
@@ -27,6 +28,9 @@ const testCommands = [
     }
   }'`,
   'curl "http://localhost:3000/api/yelp/oauth/callback?code=TEST_CODE&state=test123"',
+  `curl \\
+  --header "Authorization: Bearer $YELP_INTERNAL_API_SECRET" \\
+  http://localhost:3000/api/yelp/token`,
 ];
 
 export default function HomePage() {
@@ -134,7 +138,8 @@ pnpm dev`}
             >
 {`GET  /api/yelp/webhook?verification=abc
 POST /api/yelp/webhook
-GET  /api/yelp/oauth/callback?code=...&state=...`}
+GET  /api/yelp/oauth/callback?code=...&state=...
+GET  /api/yelp/token`}
             </pre>
           </article>
         </div>

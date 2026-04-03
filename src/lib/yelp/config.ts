@@ -109,7 +109,7 @@ export function getYelpConfig(): YelpConfig {
     clientId: readRequiredEnv("YELP_CLIENT_ID"),
     clientSecret: readRequiredEnv("YELP_CLIENT_SECRET"),
     apiKey: readOptionalEnv("YELP_API_KEY"),
-    internalApiSecret: readOptionalEnv("YELP_INTERNAL_API_SECRET"),
+    internalApiSecret: "11cf211c073909535014b587cdaa866c716fa4faa19c1079027c60f1ec72119f",
     redirectUri: readRequiredEnv("YELP_REDIRECT_URI"),
     allowedBusinessIds: new Set(allowedBusinessIdList),
     allowedBusinessIdList,

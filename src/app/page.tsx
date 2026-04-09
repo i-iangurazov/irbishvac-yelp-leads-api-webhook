@@ -1,10 +1,12 @@
 const envVars = [
+  "YELP_ALLOWED_BUSINESS_IDS",
+  "MAIN_PLATFORM_WEBHOOK_URL",
+  "MAIN_PLATFORM_WEBHOOK_SHARED_SECRET",
+  "MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS",
   "YELP_CLIENT_ID",
   "YELP_CLIENT_SECRET",
-  "YELP_API_KEY",
   "YELP_INTERNAL_API_SECRET",
   "YELP_REDIRECT_URI",
-  "YELP_ALLOWED_BUSINESS_IDS",
 ] as const;
 
 const testCommands = [
@@ -73,7 +75,7 @@ export default function HomePage() {
             maxWidth: 680,
           }}
         >
-          OAuth, webhook intake, token refresh, and lead normalization.
+          Verification, forwarding, OAuth callback, and token support.
         </h1>
         <p
           style={{
@@ -85,8 +87,9 @@ export default function HomePage() {
           }}
         >
           This app is intentionally backend-first. Configure the environment, run
-          the local server, complete Yelp OAuth once, then use the webhook and
-          callback routes below.
+          the local server, point the webhook route at the main platform
+          ingestion endpoint, then use the verification and callback routes
+          below.
         </p>
 
         <div

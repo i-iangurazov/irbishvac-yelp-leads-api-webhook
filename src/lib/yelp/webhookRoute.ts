@@ -4,11 +4,12 @@ import {
   getYelpBusinessMetadata,
   isAllowedBusinessId,
 } from "./config";
-import { createYelpLogger } from "./logger";
 import {
-  parseYelpWebhookPayload,
-  processYelpWebhookPayload,
-} from "./processLead";
+  forwardYelpWebhookToMainPlatform,
+  YelpWebhookForwardError,
+} from "./forwardWebhook";
+import { createYelpLogger } from "./logger";
+import { parseYelpWebhookPayload } from "./processLead";
 
 const logger = createYelpLogger({
   module: "webhookRoute",
@@ -121,7 +122,39 @@ export async function handleYelpWebhookPost(
     })),
   });
 
-  if (!isAllowedBusinessId(payload.data.id)) {
+  let businessAllowed: boolean;
+
+  try {
+    businessAllowed = isAllowedBusinessId(payload.data.id);
+  } catch (error) {
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Yelp business allowlist is not configured.";
+
+    logger.error("webhook.business_allowlist_failed", {
+      businessId: business.businessId,
+      businessName: business.businessName,
+      message,
+      error,
+    });
+
+    return jsonResponse(
+      {
+        ok: false,
+        forwarded: false,
+        businessId: business.businessId,
+        businessName: business.businessName,
+        updateCount: payload.data.updates.length,
+        error: message,
+      },
+      {
+        status: 503,
+      },
+    );
+  }
+
+  if (!businessAllowed) {
     logger.warn("webhook.business_rejected", {
       businessId: business.businessId,
       businessName: business.businessName,
@@ -132,10 +165,9 @@ export async function handleYelpWebhookPost(
         ok: false,
         businessId: business.businessId,
         businessName: business.businessName,
-        processed: 0,
-        skippedDuplicates: 0,
-        failed: payload.data.updates.length,
-        errors: ["Unsupported Yelp business ID."],
+        forwarded: false,
+        updateCount: payload.data.updates.length,
+        error: "Unsupported Yelp business ID.",
       },
       {
         status: 403,
@@ -143,29 +175,68 @@ export async function handleYelpWebhookPost(
     );
   }
 
-  const result = await processYelpWebhookPayload(payload);
-  const responseBody = {
-    ok: result.ok,
-    businessId: result.businessId,
-    businessName: result.businessName,
-    processed: result.processed,
-    skippedDuplicates: result.skippedDuplicates,
-    failed: result.failed,
-    ...(result.errors.length > 0
-      ? {
-          errors: result.errors.map((error) => ({
-            eventId: error.eventId,
-            leadId: error.leadId,
-            eventType: error.eventType,
-            interactionTime: error.interactionTime,
-            stage: error.stage,
-            message: error.message,
-          })),
-        }
-      : {}),
-  };
+  try {
+    const result = await forwardYelpWebhookToMainPlatform({
+      payload,
+      inboundHeaders: new Headers(request.headers),
+    });
 
-  return jsonResponse(responseBody, {
-    status: result.ok ? 200 : 500,
-  });
+    logger.info("webhook.forward_succeeded", {
+      businessId: result.businessId,
+      businessName: result.businessName,
+      updateCount: result.updateCount,
+      upstreamStatus: result.upstreamStatus,
+    });
+
+    return jsonResponse(
+      {
+        ok: true,
+        forwarded: true,
+        businessId: result.businessId,
+        businessName: result.businessName,
+        updateCount: result.updateCount,
+        upstreamStatus: result.upstreamStatus,
+      },
+      {
+        status: result.upstreamStatus,
+      },
+    );
+  } catch (error) {
+    const status =
+      error instanceof YelpWebhookForwardError ? error.status : 502;
+    const upstreamStatus =
+      error instanceof YelpWebhookForwardError ? error.upstreamStatus : null;
+    const message =
+      error instanceof Error
+        ? error.message
+        : "Failed to forward Yelp webhook.";
+
+    logger.error("webhook.forward_failed", {
+      businessId: business.businessId,
+      businessName: business.businessName,
+      updateCount: payload.data.updates.length,
+      upstreamStatus,
+      message,
+      ...(error instanceof YelpWebhookForwardError && error.details
+        ? {
+            details: error.details,
+          }
+        : {}),
+    });
+
+    return jsonResponse(
+      {
+        ok: false,
+        forwarded: false,
+        businessId: business.businessId,
+        businessName: business.businessName,
+        updateCount: payload.data.updates.length,
+        upstreamStatus,
+        error: message,
+      },
+      {
+        status,
+      },
+    );
+  }
 }

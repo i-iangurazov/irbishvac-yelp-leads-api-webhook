@@ -2,11 +2,11 @@
 
 Minimal Next.js App Router project for:
 
-- Yelp webhook intake
+- Yelp webhook intake and forwarding into the main platform
 - Yelp OAuth callback
 - secure token persistence
 - automatic token refresh
-- lead fetch and normalization
+- local OAuth token storage
 - reply-to-lead helper
 
 ## Start
@@ -20,6 +20,9 @@ YELP_API_KEY=your_yelp_api_key
 YELP_INTERNAL_API_SECRET=your_internal_secret
 YELP_REDIRECT_URI=http://localhost:3000/api/yelp/oauth/callback
 YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
+MAIN_PLATFORM_WEBHOOK_URL=https://YOUR_MAIN_APP/api/webhooks/yelp/leads
+MAIN_PLATFORM_WEBHOOK_SHARED_SECRET=your_shared_secret
+MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS=10000
 ```
 
 Install and run:
@@ -67,6 +70,12 @@ curl --request POST \
     }
   }'
 ```
+
+Expected webhook behavior:
+
+- `GET /api/webhooks/yelp/leads?verification=...` echoes the token as plain text
+- `POST /api/webhooks/yelp/leads` validates the Yelp payload and forwards accepted deliveries to `MAIN_PLATFORM_WEBHOOK_URL`
+- local filesystem storage is no longer the live webhook ingestion path
 
 OAuth callback route:
 

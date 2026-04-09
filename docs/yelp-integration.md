@@ -4,13 +4,12 @@
 
 This project is a minimal Next.js App Router backend for Yelp Leads:
 
-- `src/app/api/webhooks/yelp/leads/route.ts`: canonical Yelp webhook verification and lead delivery endpoint.
+- `src/app/api/webhooks/yelp/leads/route.ts`: canonical Yelp webhook verification and forwarding endpoint.
 - `src/app/api/yelp/webhook/route.ts`: compatibility alias that mounts the same webhook handler as the canonical route.
 - `src/app/api/yelp/oauth/callback/route.ts`: OAuth authorization-code callback and token persistence.
-- `src/lib/yelp/client.ts`: all Yelp HTTP calls using `fetch`.
-- `src/lib/yelp/tokens.ts`: access-token resolution, refresh flow, and retry on `401`.
-- `src/lib/yelp/processLead.ts`: per-update orchestration, dedupe, lead fetch, normalization, persistence, counters, and structured error aggregation.
-- `src/lib/yelp/storage.ts`: file-based dev adapter plus the adapter seam for real durable production storage.
+- `src/lib/yelp/forwardWebhook.ts`: forwarding client for the main platform webhook endpoint.
+- `src/lib/yelp/tokens.ts`: OAuth access-token resolution, refresh flow, and retry on `401`.
+- `src/lib/yelp/storage.ts`: file-based adapter that still backs local OAuth token storage and helper workflows.
 
 Local development stores files in:
 
@@ -24,11 +23,11 @@ Temporary serverless fallback writes to:
 - `/tmp/.data/yelp/processed-events.json`
 - `/tmp/.data/yelp/leads/{leadId}.json`
 
-That `/tmp` fallback is only a stopgap for Vercel/serverless. Durable storage is still required for real production.
+That `/tmp` fallback is no longer the live webhook ingestion path. It is only a stopgap for OAuth/helper storage on Vercel/serverless.
 
 ## Why This Replaces `webhook.site`
 
-`webhook.site` is fine for manual inspection, but it is not an application backend. It cannot own OAuth tokens safely, dedupe events, normalize leads, or persist webhook processing state for your app. Yelp webhook traffic needs to land on your app so the same system can authorize, fetch, process, and store leads.
+`webhook.site` is fine for manual inspection, but it is not an application backend. Yelp webhook traffic needs to land on your controlled app surface so you can verify setup, allowlist businesses, and forward accepted deliveries into the main platform that owns `YelpWebhookEvent`, `SyncRun`, and autoresponder processing.
 
 ## Live IRBIS Businesses
 
@@ -45,25 +44,40 @@ YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
 
 ## Environment Variables
 
-Required:
+Required for the public webhook route:
+
+```bash
+YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
+MAIN_PLATFORM_WEBHOOK_URL=https://YOUR_MAIN_APP/api/webhooks/yelp/leads
+```
+
+Optional for forwarded webhook auth and timeout:
+
+```bash
+MAIN_PLATFORM_WEBHOOK_SHARED_SECRET=your_shared_secret
+MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS=10000
+```
+
+Required for OAuth callback and internal token retrieval:
 
 ```bash
 YELP_CLIENT_ID=your_yelp_client_id
 YELP_CLIENT_SECRET=your_yelp_client_secret
-YELP_API_KEY=your_yelp_api_key
-YELP_INTERNAL_API_SECRET=your_internal_secret
 YELP_REDIRECT_URI=http://localhost:3000/api/yelp/oauth/callback
-YELP_ALLOWED_BUSINESS_IDS=1T1qXHt8mdTiXkPUpKn21A,ys4FVTHxbSepIkvCLHYxCA
+YELP_INTERNAL_API_SECRET=your_internal_secret
 ```
 
-Optional:
+Optional for OAuth/helper workflows:
 
 ```bash
+YELP_API_KEY=your_yelp_api_key
 YELP_DATA_DIR=.data/yelp
 YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 ```
 
-`YELP_API_KEY` is not used by webhook processing itself, but it is useful for operational subscription checks.
+`MAIN_PLATFORM_WEBHOOK_SHARED_SECRET` is sent as the `x-irbis-forward-secret` header when configured.
+The current main platform route does not enforce that header yet, so forwarding works without it. Add validation on the main platform when you want to lock the route down.
+`YELP_API_KEY` is not used by forwarding itself, but it is useful for operational subscription checks.
 `YELP_INTERNAL_API_SECRET` protects the token retrieval endpoint and should be a long random secret.
 
 ## Local Setup
@@ -79,19 +93,15 @@ YELP_TOKEN_REFRESH_BUFFER_SECONDS=300
 
 Primary recommendation: deploy on Vercel if the rest of the app already runs on Vercel.
 
-Important constraint: local filesystem storage is not durable on serverless. The current file adapter can use `/tmp/.data/yelp` as a temporary write location, but `/tmp` is ephemeral and not a real production datastore.
+Important constraint: local filesystem storage is not durable on serverless. This app should not use `/tmp` as the live webhook integration path.
 
-The simplest durable production path is:
+The intended production path is:
 
 1. Deploy the app on Vercel.
-2. Replace the default file adapter in `src/lib/yelp/storage.ts` with a durable `YelpStorageAdapter`.
-3. Store Yelp tokens, processed event IDs, and lead snapshots in PostgreSQL or another durable store.
-
-Recommended production storage shape:
-
-- `yelp_oauth_tokens`: one row for the current Yelp OAuth token set
-- `yelp_processed_events`: unique `event_id`
-- `yelp_lead_snapshots`: one row per `lead_id`
+2. Point Yelp at `https://YOUR_WEBHOOK_APP/api/webhooks/yelp/leads`.
+3. Set `MAIN_PLATFORM_WEBHOOK_URL` to the main platform route, for example `https://YOUR_MAIN_APP/api/webhooks/yelp/leads`.
+4. Let the main platform persist `YelpWebhookEvent`, `SyncRun`, and downstream lead records.
+5. Treat this repo’s local storage only as support for OAuth/helper flows, not as the production lead sink.
 
 ## How OAuth Works
 
@@ -156,13 +166,11 @@ abc
    - `event_type`
    - `interaction_time`
 5. Unsupported business IDs are rejected with `403`.
-6. Duplicate `event_id` values are skipped explicitly and counted.
-7. Non-duplicate events fetch a valid access token.
-8. The service fetches the Yelp lead by `lead_id`.
-9. The lead is normalized and persisted.
-10. The processed `event_id` is stored for deduplication.
+6. Accepted payloads are forwarded to `MAIN_PLATFORM_WEBHOOK_URL`.
+7. The forwarding request preserves useful delivery headers such as `x-yelp-delivery-id`, `x-request-id`, and `x-correlation-id`.
+8. The main platform route is responsible for creating `YelpWebhookEvent`, `SyncRun`, and the later Yelp lead refresh workflow.
 
-Malformed payloads return `400`. Processing failures return `500` with a sanitized, structured summary.
+Malformed payloads return `400`. Business allowlist rejections return `403`. Missing forward config returns `503`. Upstream forwarding failures return `502` or `504` with a concise operational error.
 
 ## Business Identification
 
@@ -178,47 +186,34 @@ That makes it obvious whether the webhook came from:
 
 ## POST Response Meaning
 
-Successful or duplicate-only processing returns a body like:
+Successful forwarding returns a body like:
 
 ```json
 {
   "ok": true,
+  "forwarded": true,
   "businessId": "1T1qXHt8mdTiXkPUpKn21A",
   "businessName": "IRBIS San Jose",
-  "processed": 1,
-  "skippedDuplicates": 0,
-  "failed": 0
+  "updateCount": 1,
+  "upstreamStatus": 202
 }
 ```
 
-Partial or full processing failure returns a body like:
+Forwarding failure returns a body like:
 
 ```json
 {
   "ok": false,
+  "forwarded": false,
   "businessId": "1T1qXHt8mdTiXkPUpKn21A",
   "businessName": "IRBIS San Jose",
-  "processed": 0,
-  "skippedDuplicates": 0,
-  "failed": 1,
-  "errors": [
-    {
-      "eventId": "evt_test_001",
-      "leadId": "29HeLueoGE2vvD8tEVJYMQ",
-      "eventType": "NEW_EVENT",
-      "interactionTime": "2026-03-17T15:00:00+00:00",
-      "stage": "lead_fetch",
-      "message": "Failed to fetch Yelp lead details."
-    }
-  ]
+  "updateCount": 1,
+  "upstreamStatus": 500,
+  "error": "Main platform webhook endpoint rejected the forward."
 }
 ```
 
-Meaning of the counters:
-
-- `processed`: successfully fetched and persisted lead updates
-- `skippedDuplicates`: duplicate or already-in-flight `event_id` values
-- `failed`: updates that could not complete safely
+The main platform is the place that should report duplicate-safe `SyncRun` / `YelpWebhookEvent` state after the forward succeeds.
 
 ## Expected Log Events
 
@@ -227,13 +222,8 @@ The webhook path emits structured events such as:
 - `webhook.request_received`
 - `webhook.validation_failed`
 - `webhook.business_rejected`
-- `webhook.update_processing_started`
-- `webhook.update_duplicate_skipped`
-- `webhook.lead_fetch_succeeded`
-- `webhook.lead_fetch_failed`
-- `webhook.persistence_succeeded`
-- `webhook.persistence_failed`
-- `webhook.request_completed`
+- `webhook.forward_succeeded`
+- `webhook.forward_failed`
 
 ## Exact `curl` Commands
 
@@ -303,6 +293,11 @@ curl --request POST \
   }'
 ```
 
+Expected result:
+
+- webhook app returns `202` if the main platform accepted the forward
+- main platform stores the raw delivery and queues its own lead refresh workflow
+
 ### F. Example subscription verification reminder
 
 ```bash
@@ -317,8 +312,9 @@ curl --request GET \
 - `Missing required Yelp environment variable`: one of the required server env vars is unset.
 - `Failed to exchange Yelp OAuth code`: the authorization code is missing, expired, already used, or does not match `YELP_REDIRECT_URI`.
 - `404 NOT_FOUND` from the Yelp token exchange: the token endpoint URL is wrong. It must be `https://api.yelp.com/oauth2/token`.
-- Repeated duplicate webhooks: expected when Yelp retries delivery. `event_id` dedupe prevents reprocessing.
+- `503` from the webhook route: `MAIN_PLATFORM_WEBHOOK_URL` is missing or invalid.
 - `403` from the webhook route: the incoming `data.id` is not one of the accepted IRBIS business IDs.
-- `500` with webhook errors: at least one update failed lead fetch or persistence. Inspect structured log events for the failing stage.
-- Local tests work but production loses tokens or processed events: the current file adapter is still not durable storage. Move to PostgreSQL or another durable adapter.
+- `502` or `504` from the webhook route: forwarding to the main platform failed or timed out. Inspect `webhook.forward_failed` logs and the main platform deployment health.
+- Local tests work but production does not create `YelpWebhookEvent` / `SyncRun`: verify `MAIN_PLATFORM_WEBHOOK_URL` points at the real main app route and that the main app deployment is healthy.
+- Local tests work but production loses OAuth tokens: the current file adapter is still not durable storage. Move OAuth/helper storage to PostgreSQL or another durable adapter if this app must retain tokens long-term.
 - Reply failures after long uptime: verify the stored refresh token is valid and that the OAuth app still has the required Yelp scopes.

@@ -5,6 +5,7 @@ import type { YelpBusinessMetadata } from "./types";
 const DEFAULT_DATA_DIR = ".data/yelp";
 const DEFAULT_PRODUCTION_DATA_DIR = "/tmp/.data/yelp";
 const DEFAULT_REFRESH_BUFFER_SECONDS = 300;
+const DEFAULT_MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS = 10000;
 const YELP_BUSINESS_NAME_BY_ID = {
   "1T1qXHt8mdTiXkPUpKn21A": "IRBIS San Jose",
   ys4FVTHxbSepIkvCLHYxCA: "IRBIS Redwood City",
@@ -24,7 +25,17 @@ export interface YelpConfig {
   accessTokenRefreshBufferMs: number;
 }
 
+export interface YelpWebhookForwardingConfig {
+  allowedBusinessIds: ReadonlySet<string>;
+  allowedBusinessIdList: string[];
+  mainPlatformWebhookUrl: string | null;
+  mainPlatformWebhookSharedSecret: string | null;
+  mainPlatformWebhookTimeoutMs: number;
+}
+
 let cachedConfig: YelpConfig | null = null;
+let cachedAllowedBusinessIdList: string[] | null = null;
+let cachedWebhookForwardingConfig: YelpWebhookForwardingConfig | null = null;
 
 function readRequiredEnv(name: string): string {
   const value = process.env[name]?.trim();
@@ -56,6 +67,18 @@ function parseAllowedBusinessIds(value: string): string[] {
   return ids;
 }
 
+function getAllowedBusinessIdList(): string[] {
+  if (cachedAllowedBusinessIdList) {
+    return cachedAllowedBusinessIdList;
+  }
+
+  cachedAllowedBusinessIdList = parseAllowedBusinessIds(
+    readRequiredEnv("YELP_ALLOWED_BUSINESS_IDS"),
+  );
+
+  return cachedAllowedBusinessIdList;
+}
+
 function parseRefreshBufferMs(value: string | null): number {
   if (!value) {
     return DEFAULT_REFRESH_BUFFER_SECONDS * 1000;
@@ -70,6 +93,22 @@ function parseRefreshBufferMs(value: string | null): number {
   }
 
   return parsed * 1000;
+}
+
+function parseTimeoutMs(value: string | null): number {
+  if (!value) {
+    return DEFAULT_MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS;
+  }
+
+  const parsed = Number.parseInt(value, 10);
+
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    throw new Error(
+      "MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS must be a positive integer.",
+    );
+  }
+
+  return parsed;
 }
 
 function resolveDataDir(dataDir: string): string {
@@ -101,9 +140,7 @@ export function getYelpConfig(): YelpConfig {
     return cachedConfig;
   }
 
-  const allowedBusinessIdList = parseAllowedBusinessIds(
-    readRequiredEnv("YELP_ALLOWED_BUSINESS_IDS"),
-  );
+  const allowedBusinessIdList = getAllowedBusinessIdList();
 
   cachedConfig = {
     clientId: readRequiredEnv("YELP_CLIENT_ID"),
@@ -124,8 +161,30 @@ export function getYelpConfig(): YelpConfig {
   return cachedConfig;
 }
 
+export function getYelpWebhookForwardingConfig(): YelpWebhookForwardingConfig {
+  if (cachedWebhookForwardingConfig) {
+    return cachedWebhookForwardingConfig;
+  }
+
+  const allowedBusinessIdList = getAllowedBusinessIdList();
+
+  cachedWebhookForwardingConfig = {
+    allowedBusinessIds: new Set(allowedBusinessIdList),
+    allowedBusinessIdList,
+    mainPlatformWebhookUrl: readOptionalEnv("MAIN_PLATFORM_WEBHOOK_URL"),
+    mainPlatformWebhookSharedSecret: readOptionalEnv(
+      "MAIN_PLATFORM_WEBHOOK_SHARED_SECRET",
+    ),
+    mainPlatformWebhookTimeoutMs: parseTimeoutMs(
+      readOptionalEnv("MAIN_PLATFORM_WEBHOOK_TIMEOUT_MS"),
+    ),
+  };
+
+  return cachedWebhookForwardingConfig;
+}
+
 export function isAllowedBusinessId(businessId: string): boolean {
-  return getYelpConfig().allowedBusinessIds.has(businessId);
+  return getAllowedBusinessIdList().includes(businessId);
 }
 
 export function getYelpBusinessName(businessId: string): string {

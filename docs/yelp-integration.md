@@ -4,7 +4,8 @@
 
 This project is a minimal Next.js App Router backend for Yelp Leads:
 
-- `src/app/api/yelp/webhook/route.ts`: Yelp webhook verification, health response, payload validation, business rejection, and honest request summaries.
+- `src/app/api/webhooks/yelp/leads/route.ts`: canonical Yelp webhook verification and lead delivery endpoint.
+- `src/app/api/yelp/webhook/route.ts`: compatibility alias that mounts the same webhook handler as the canonical route.
 - `src/app/api/yelp/oauth/callback/route.ts`: OAuth authorization-code callback and token persistence.
 - `src/lib/yelp/client.ts`: all Yelp HTTP calls using `fetch`.
 - `src/lib/yelp/tokens.ts`: access-token resolution, refresh flow, and retry on `401`.
@@ -132,13 +133,13 @@ https://api.yelp.com/oauth2/token
 
 ## Webhook Verification and Health
 
-- `GET /api/yelp/webhook?verification=abc` returns:
+- `GET /api/webhooks/yelp/leads?verification=abc` returns the verification token as plain text.
 
-```json
-{ "verification": "abc" }
+```text
+abc
 ```
 
-- `GET /api/yelp/webhook` returns:
+- `GET /api/webhooks/yelp/leads` returns:
 
 ```json
 { "ok": true, "message": "Yelp webhook endpoint is live" }
@@ -239,14 +240,14 @@ The webhook path emits structured events such as:
 ### A. Local webhook verification test
 
 ```bash
-curl "http://localhost:3000/api/yelp/webhook?verification=test123"
+curl "http://localhost:3000/api/webhooks/yelp/leads?verification=test123"
 ```
 
 ### B. Local webhook POST test
 
 ```bash
 curl --request POST \
-  --url http://localhost:3000/api/yelp/webhook \
+  --url http://localhost:3000/api/webhooks/yelp/leads \
   --header 'content-type: application/json' \
   --data '{
     "time": "2026-03-17T15:00:00+00:00",
@@ -276,14 +277,14 @@ This proves the route wiring. It will only succeed with a real Yelp authorizatio
 ### D. Production verification test
 
 ```bash
-curl "https://YOUR_DOMAIN/api/yelp/webhook?verification=test123"
+curl "https://YOUR_DOMAIN/api/webhooks/yelp/leads?verification=test123"
 ```
 
 ### E. Production webhook POST test
 
 ```bash
 curl --request POST \
-  --url https://YOUR_DOMAIN/api/yelp/webhook \
+  --url https://YOUR_DOMAIN/api/webhooks/yelp/leads \
   --header 'content-type: application/json' \
   --data '{
     "time": "2026-03-17T15:00:00+00:00",

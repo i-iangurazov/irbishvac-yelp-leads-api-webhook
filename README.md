@@ -42,14 +42,14 @@ pnpm start
 Verification:
 
 ```bash
-curl "http://localhost:3000/api/yelp/webhook?verification=test123"
+curl "http://localhost:3000/api/webhooks/yelp/leads?verification=test123"
 ```
 
 Webhook POST:
 
 ```bash
 curl --request POST \
-  --url http://localhost:3000/api/yelp/webhook \
+  --url http://localhost:3000/api/webhooks/yelp/leads \
   --header 'content-type: application/json' \
   --data '{
     "time": "2026-03-17T15:00:00+00:00",
@@ -86,3 +86,6 @@ curl \
 
 Detailed setup, production architecture, storage guidance, and production curl
 commands are in `docs/yelp-integration.md`.
+
+Legacy compatibility: `/api/yelp/webhook` remains mounted, but the canonical
+public Yelp webhook URL is `/api/webhooks/yelp/leads`.

@@ -8,9 +8,9 @@ const envVars = [
 ] as const;
 
 const testCommands = [
-  'curl "http://localhost:3000/api/yelp/webhook?verification=test123"',
+  'curl "http://localhost:3000/api/webhooks/yelp/leads?verification=test123"',
   `curl --request POST \\
-  --url http://localhost:3000/api/yelp/webhook \\
+  --url http://localhost:3000/api/webhooks/yelp/leads \\
   --header 'content-type: application/json' \\
   --data '{
     "time": "2026-03-17T15:00:00+00:00",
@@ -136,8 +136,8 @@ pnpm dev`}
                 lineHeight: 1.6,
               }}
             >
-{`GET  /api/yelp/webhook?verification=abc
-POST /api/yelp/webhook
+{`GET  /api/webhooks/yelp/leads?verification=abc
+POST /api/webhooks/yelp/leads
 GET  /api/yelp/oauth/callback?code=...&state=...
 GET  /api/yelp/token`}
             </pre>

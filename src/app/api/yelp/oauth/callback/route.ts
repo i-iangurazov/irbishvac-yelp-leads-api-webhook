@@ -3,6 +3,7 @@ import { NextResponse } from "next/server";
 import { getYelpConfig } from "../../../../../lib/yelp/config";
 import { createYelpLogger } from "../../../../../lib/yelp/logger";
 import { exchangeAndStoreAuthCode } from "../../../../../lib/yelp/tokens";
+import { syncYelpTokensToMainPlatform } from "../../../../../lib/yelp/syncTokens";
 
 export const runtime = "nodejs";
 
@@ -43,12 +44,20 @@ export async function GET(request: Request): Promise<Response> {
       expiresOn: tokens.expiresOn,
     });
 
+    const syncResult = await syncYelpTokensToMainPlatform(tokens);
+
+    logger.info("oauth.token_sync_completed", {
+      upstreamStatus: syncResult.upstreamStatus,
+      expiresOn: tokens.expiresOn,
+    });
+
     return NextResponse.json({
       ok: true,
       state,
       expiresOn: tokens.expiresOn,
       tokenType: tokens.tokenType,
       scope: tokens.scope ?? null,
+      syncedToMainPlatform: true,
     });
   } catch (error) {
     logger.error("oauth.callback_failed", {
